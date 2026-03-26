@@ -1,42 +1,48 @@
 # DB_parse
 
-REST API сервис для получения XML документа закупки с сайта `zakupki.gov.ru`.
+REST API service for fetching an XML procurement document from `zakupki.gov.ru`.
 
-## Что делает сервис
+## Current scope
 
-Сервис принимает идентификатор закупки, определяет подходящий тип документа и возвращает XML.
+Implemented now:
 
-Поддерживаются следующие типы документов:
+- REST API endpoint that accepts only a procurement identifier
+- automatic detection of document type
+- XML response to the client
 
-- `notice`
-- `contract`
-- `contract223`
+Planned next:
 
-Сервис последовательно проверяет URL:
+- save received XML into PostgreSQL
+
+## Supported source URLs
+
+The service tries these URLs in order:
 
 - `https://zakupki.gov.ru/epz/order/notice/printForm/viewXml.html?regNumber={id}`
 - `https://zakupki.gov.ru/epz/contract/printForm/viewXml.html?contractReestrNumber={id}`
 - `https://zakupki.gov.ru/epz/contractfz223/printForm/viewXml.html?contractNumber={id}`
 
-## Требования
+## Requirements
 
 - `.NET SDK 10.0`
+- network access to `https://zakupki.gov.ru`
+- PostgreSQL for the next stage
 
-## Запуск
+## Run
 
-Из корня репозитория:
+From repository root:
 
 ```powershell
 dotnet run --project .\DB_parse\DB_parse.csproj
 ```
 
-После запуска сервис по умолчанию доступен на:
+Default address:
 
 ```text
 http://localhost:5000
 ```
 
-Если нужно указать свой порт:
+Custom port:
 
 ```powershell
 dotnet run --project .\DB_parse\DB_parse.csproj --urls=http://localhost:5099
@@ -44,13 +50,13 @@ dotnet run --project .\DB_parse\DB_parse.csproj --urls=http://localhost:5099
 
 ## API
 
-### Получить XML по идентификатору закупки
+Request:
 
 ```http
 GET /api/xml/{registryNumber}
 ```
 
-Примеры:
+Examples:
 
 ```powershell
 curl http://localhost:5000/api/xml/0338200008525000109
@@ -58,28 +64,56 @@ curl http://localhost:5000/api/xml/3861701026824000058
 curl http://localhost:5000/api/xml/80273021553250000050000
 ```
 
-Успешный ответ:
+Successful response:
 
-- статус `200 OK`
-- content-type `application/xml`
+- `200 OK`
+- `application/xml`
 
-Возможные ошибки:
+Possible errors:
 
-- `400 Bad Request` - если идентификатор пустой
-- `404 Not Found` - если документ не найден ни по одному из поддерживаемых типов
-- `502 Bad Gateway` - если внешний сервис недоступен или вернул ошибку
+- `400 Bad Request`
+- `404 Not Found`
+- `502 Bad Gateway`
 
-## Проверка
+## PostgreSQL draft
 
-Сборка проекта:
+This stage is not implemented yet. Draft files were added:
+
+- `db/001_create_xml_documents.sql`
+- `DB_parse/appsettings.json`
+- `DB_parse/Services/ProcurementXmlStorageService.cs`
+
+## Configuration
+
+All current API settings and PostgreSQL connection settings are stored in:
+
+- `DB_parse/appsettings.json`
+
+This includes:
+
+- local endpoint path
+- upstream base URL
+- upstream route templates and query parameter names
+- PostgreSQL connection string
+- PostgreSQL host and port
+
+The PostgreSQL connection string is described through host and port, for example:
+
+```text
+Host=localhost;Port=5432;Database=db_parse;Username=postgres;Password=postgres
+```
+
+## Build
 
 ```powershell
 dotnet build .\DB_parse\DB_parse.csproj
 ```
 
-Если сборка не выполняется из-за блокировки `DB_parse.exe`, сначала остановите запущенный экземпляр приложения через `Ctrl+C`.
+If build fails because `DB_parse.exe` is locked, stop the running app first with `Ctrl+C`.
 
-## Структура проекта
+## Project structure
 
-- `DB_parse/Program.cs` - настройка web-приложения и HTTP endpoint
-- `DB_parse/Services/ZakupkiXmlService.cs` - логика запроса XML с `zakupki.gov.ru`
+- `DB_parse/Program.cs` - web application startup and endpoint
+- `DB_parse/Services/ZakupkiXmlService.cs` - XML download logic
+- `DB_parse/Services/ProcurementXmlStorageService.cs` - placeholder for PostgreSQL XML save
+- `db/001_create_xml_documents.sql` - PostgreSQL table draft

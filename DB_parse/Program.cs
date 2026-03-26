@@ -1,19 +1,25 @@
 using System.Net;
+using DB_parse.Configuration;
 using DB_parse.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+var apiSettings = builder.Configuration.GetSection(ApiSettings.SectionName).Get<ApiSettings>()
+                  ?? throw new InvalidOperationException("Api settings are not configured.");
 
+builder.Services.Configure<ApiSettings>(builder.Configuration.GetSection(ApiSettings.SectionName));
+builder.Services.AddSingleton<IProcurementXmlStorageService, ProcurementXmlStorageService>();
 builder.Services.AddHttpClient<ZakupkiXmlService>(client =>
 {
-    client.BaseAddress = new Uri("https://zakupki.gov.ru/");
-    client.DefaultRequestHeaders.UserAgent.ParseAdd("DB-parse-service/1.0");
+    client.BaseAddress = new Uri(apiSettings.Upstream.BaseUrl);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd(apiSettings.Upstream.UserAgent);
 });
 
 var app = builder.Build();
 
-app.MapGet("/api/xml/{registryNumber}", async (
+app.MapGet(apiSettings.Endpoints.GetXmlByRegistryNumber, async (
     string registryNumber,
     ZakupkiXmlService xmlService,
+    IProcurementXmlStorageService storageService,
     CancellationToken cancellationToken) =>
 {
     if (string.IsNullOrWhiteSpace(registryNumber))
@@ -24,6 +30,7 @@ app.MapGet("/api/xml/{registryNumber}", async (
     try
     {
         var xmlDocument = await xmlService.GetXmlAsync(registryNumber, cancellationToken);
+        await storageService.SaveAsync(registryNumber, xmlDocument, cancellationToken);
         return Results.Content(xmlDocument, "application/xml; charset=utf-8");
     }
     catch (ArgumentException exception)
@@ -45,8 +52,8 @@ app.MapGet("/api/xml/{registryNumber}", async (
 
 app.MapGet("/", () => Results.Ok(new
 {
-    service = "zakupki-xml-proxy",
-    endpoint = "/api/xml/{registryNumber}"
+    service = apiSettings.ServiceName,
+    endpoint = apiSettings.Endpoints.GetXmlByRegistryNumber
 }));
 
 app.Run();

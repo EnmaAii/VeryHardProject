@@ -1,15 +1,12 @@
 using System.Net;
+using DB_parse.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace DB_parse.Services;
 
-public sealed class ZakupkiXmlService(HttpClient httpClient)
+public sealed class ZakupkiXmlService(HttpClient httpClient, IOptions<ApiSettings> apiOptions)
 {
-    private static readonly (string DocumentType, string Path, string QueryKey)[] Routes =
-    [
-        ("notice", "epz/order/notice/printForm/viewXml.html", "regNumber"),
-        ("contract", "epz/contract/printForm/viewXml.html", "contractReestrNumber"),
-        ("contract223", "epz/contractfz223/printForm/viewXml.html", "contractNumber")
-    ];
+    private readonly ApiSettings.RouteSettings[] _routes = apiOptions.Value.Upstream.Routes;
 
     public async Task<string> GetXmlAsync(string registryNumber, CancellationToken cancellationToken)
     {
@@ -18,7 +15,12 @@ public sealed class ZakupkiXmlService(HttpClient httpClient)
             throw new ArgumentException("Registry number is required.");
         }
 
-        foreach (var route in Routes)
+        if (_routes.Length == 0)
+        {
+            throw new InvalidOperationException("No upstream routes are configured.");
+        }
+
+        foreach (var route in _routes)
         {
             var requestUri = $"{route.Path}?{route.QueryKey}={Uri.EscapeDataString(registryNumber)}";
             using var response = await httpClient.GetAsync(requestUri, cancellationToken);
