@@ -1,39 +1,154 @@
 # DB_parse
 
-REST API service for fetching an XML procurement document from `zakupki.gov.ru`.
+REST API service for fetching and processing XML procurement documents from `zakupki.gov.ru`.
+
+---
 
 ## Current scope
 
-Implemented now:
+Implemented:
 
-- REST API endpoint that accepts only a procurement identifier
-- automatic detection of document type
-- XML response to the client
+### 1. XML retrieval
 
-Planned next:
+* REST API endpoint that accepts a procurement identifier
+* automatic detection of document type
+* returns XML document to client
 
-- save received XML into PostgreSQL
+### 2. XML persistence
+
+* received XML is stored in PostgreSQL
+
+### 3. XML parsing (attachments)
+
+* XML is parsed inside PostgreSQL
+* attachment metadata is extracted:
+
+  * `fileName`
+  * `url`
+  * `description`
+* results are stored in a separate table
+* parsing is executed automatically via `pg_cron`
+
+---
 
 ## Supported source URLs
 
 The service tries these URLs in order:
 
-- `https://zakupki.gov.ru/epz/order/notice/printForm/viewXml.html?regNumber={id}`
-- `https://zakupki.gov.ru/epz/contract/printForm/viewXml.html?contractReestrNumber={id}`
-- `https://zakupki.gov.ru/epz/contractfz223/printForm/viewXml.html?contractNumber={id}`
+* `https://zakupki.gov.ru/epz/order/notice/printForm/viewXml.html?regNumber={id}`
+* `https://zakupki.gov.ru/epz/contract/printForm/viewXml.html?contractReestrNumber={id}`
+* `https://zakupki.gov.ru/epz/contractfz223/printForm/viewXml.html?contractNumber={id}`
+
+---
 
 ## Requirements
 
-- `.NET SDK 10.0`
-- network access to `https://zakupki.gov.ru`
-- PostgreSQL for the next stage
+* `.NET SDK 10.0`
+* Docker (for PostgreSQL with pg_cron)
+* network access to `https://zakupki.gov.ru`
 
-## Run
+---
 
-From repository root:
+# Full setup guide
 
-```powershell
-dotnet run --project .\DB_parse\DB_parse.csproj
+## 1. Start PostgreSQL with pg_cron
+
+### Dockerfile
+
+Create file:
+
+```bash
+Dockerfile.postgres
+```
+
+```dockerfile
+FROM postgres:16
+
+RUN apt-get update && apt-get install -y postgresql-16-cron
+
+RUN echo "shared_preload_libraries = 'pg_cron'" >> /usr/share/postgresql/postgresql.conf.sample
+RUN echo "cron.database_name = 'db_parse'" >> /usr/share/postgresql/postgresql.conf.sample
+```
+
+---
+
+### docker-compose
+
+Create file:
+
+```bash
+docker-compose.yml
+```
+
+```yaml
+version: '3.9'
+
+services:
+  postgres:
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
+    container_name: postgres_pgcron
+    restart: always
+    environment:
+      POSTGRES_DB: db_parse
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:
+```
+
+---
+
+### Run database
+
+```bash
+docker-compose up --build
+```
+
+---
+
+## 2. Initialize database schema
+
+### Create base table (XML storage)
+
+```bash
+psql -h localhost -U postgres -d db_parse -f db/001_create_xml_documents.sql
+```
+
+Creates table:
+
+* `procurement_xml_documents`
+
+  * procurement_id
+  * xml_document (XML)
+  * created_at
+
+---
+
+### Create parsing logic + cron
+
+```bash
+psql -h localhost -U postgres -d db_parse -f db/002_parse_attachments.sql
+```
+
+This file contains:
+
+* table `procurement_attachments`
+* function `parse_procurement_attachments()`
+* pg_cron job
+
+---
+
+## 3. Run API
+
+```bash
+dotnet run --project DB_parse/DB_parse.csproj
 ```
 
 Default address:
@@ -42,78 +157,188 @@ Default address:
 http://localhost:5000
 ```
 
-Custom port:
+---
 
-```powershell
-dotnet run --project .\DB_parse\DB_parse.csproj --urls=http://localhost:5099
-```
+## 4. Use API
 
-## API
-
-Request:
-
-```http
-GET /api/xml/{registryNumber}
-```
-
-Examples:
-
-```powershell
+```bash
 curl http://localhost:5000/api/xml/0338200008525000109
-curl http://localhost:5000/api/xml/3861701026824000058
-curl http://localhost:5000/api/xml/80273021553250000050000
 ```
 
-Successful response:
+What happens:
 
-- `200 OK`
-- `application/xml`
+1. XML is fetched from zakupki.gov.ru
+2. XML is returned to client
+3. XML is saved into PostgreSQL
 
-Possible errors:
+---
 
-- `400 Bad Request`
-- `404 Not Found`
-- `502 Bad Gateway`
+## 5. Automatic parsing
 
-## PostgreSQL draft
-
-This stage is not implemented yet. Draft files were added:
-
-- `db/001_create_xml_documents.sql`
-- `DB_parse/appsettings.json`
-- `DB_parse/Services/ProcurementXmlStorageService.cs`
-
-## Configuration
-
-All current API settings and PostgreSQL connection settings are stored in:
-
-- `DB_parse/appsettings.json`
-
-This includes:
-
-- local endpoint path
-- upstream base URL
-- upstream route templates and query parameter names
-- PostgreSQL connection string
-- PostgreSQL host and port
-
-The PostgreSQL connection string is described through host and port, for example:
+`pg_cron` runs:
 
 ```text
-Host=localhost;Port=5432;Database=db_parse;Username=postgres;Password=postgres
+*/5 * * * *
 ```
 
-## Build
+every 5 minutes it executes:
 
-```powershell
-dotnet build .\DB_parse\DB_parse.csproj
+```sql
+SELECT parse_procurement_attachments();
 ```
 
-If build fails because `DB_parse.exe` is locked, stop the running app first with `Ctrl+C`.
+---
 
-## Project structure
+## 6. Verify data
 
-- `DB_parse/Program.cs` - web application startup and endpoint
-- `DB_parse/Services/ZakupkiXmlService.cs` - XML download logic
-- `DB_parse/Services/ProcurementXmlStorageService.cs` - placeholder for PostgreSQL XML save
-- `db/001_create_xml_documents.sql` - PostgreSQL table draft
+### XML storage
+
+```sql
+SELECT * FROM procurement_xml_documents;
+```
+
+---
+
+### Parsed attachments
+
+```sql
+SELECT * FROM procurement_attachments;
+```
+
+---
+
+### Cron jobs
+
+```sql
+SELECT * FROM cron.job;
+```
+
+---
+
+### Cron execution logs
+
+```sql
+SELECT * 
+FROM cron.job_run_details
+ORDER BY start_time DESC;
+```
+
+---
+
+# Database structure
+
+## 1. procurement_xml_documents
+
+Stores raw XML:
+
+* `id`
+* `procurement_id`
+* `xml_document`
+* `created_at`
+
+---
+
+## 2. procurement_attachments
+
+Stores parsed attachment metadata:
+
+* `id`
+* `procurement_xml_id` (FK)
+* `file_name`
+* `url`
+* `description`
+* `created_at`
+
+---
+
+# Key components
+
+## API layer
+
+* `Program.cs` — endpoint definition
+* `ZakupkiXmlService.cs` — XML download logic
+* `ProcurementXmlStorageService.cs` — saves XML into DB
+
+---
+
+## Database layer
+
+* `001_create_xml_documents.sql` — XML storage table
+* `002_parse_attachments.sql`:
+
+  * attachments table
+  * parsing function (PL/pgSQL + XPath)
+  * pg_cron scheduling
+
+---
+
+## Parsing logic
+
+* XML is processed using PostgreSQL `xpath`
+* namespaces handled via `local-name()`
+* multiple attachments extracted per document
+
+---
+
+# Processing pipeline
+
+```text
+API request
+    ↓
+Fetch XML
+    ↓
+Save XML (PostgreSQL)
+    ↓
+pg_cron (every 5 min)
+    ↓
+parse_procurement_attachments()
+    ↓
+attachments saved to DB
+```
+
+---
+
+# Notes
+
+* PostgreSQL must be started with `pg_cron` enabled
+* first run requires manual schema initialization
+* XML parsing depends on actual structure of zakupki documents
+* repeated cron runs are safe (can be configured with unique constraints)
+
+---
+
+# Project structure
+
+* `DB_parse/Program.cs` — web application startup
+* `DB_parse/Services/ZakupkiXmlService.cs` — XML retrieval
+* `DB_parse/Services/ProcurementXmlStorageService.cs` — DB persistence
+* `db/001_create_xml_documents.sql` — XML table
+* `db/002_parse_attachments.sql` — parsing + cron
+
+---
+
+# Build
+
+```bash
+dotnet build DB_parse/DB_parse.csproj
+```
+
+---
+
+# Summary
+
+The system now:
+
+✔ retrieves XML documents
+✔ stores them in PostgreSQL
+✔ parses attachments automatically
+✔ schedules processing via pg_cron
+
+---
+
+Next steps (planned):
+
+* download files by URL
+* extract text from documents
+* generate embeddings
+* build AI agent
