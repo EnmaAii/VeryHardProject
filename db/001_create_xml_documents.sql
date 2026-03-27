@@ -1,9 +1,6 @@
--- Draft only. Not used by the application yet.
--- PostgreSQL schema for stage 2:
--- save the fetched XML document into the database.
-
-
--- TODO:
--- 1. Decide whether procurement_id must be unique.
--- 2. Decide whether document_type should be stored in a separate column.
--- 3. Add migration strategy.
+CREATE TABLE IF NOT EXISTS procurement_xml_documents (
+    id SERIAL PRIMARY KEY,
+    procurement_id TEXT NOT NULL UNIQUE,
+    xml_document XML NOT NULL,
+    created_at TIMESTAMP DEFAULT NOW()
+);

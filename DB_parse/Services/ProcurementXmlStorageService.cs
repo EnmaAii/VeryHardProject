@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Configuration;
+using Npgsql;
+using NpgsqlTypes;
 
 namespace DB_parse.Services;
 
@@ -13,23 +15,22 @@ public sealed class ProcurementXmlStorageService(IConfiguration configuration) :
                                                ?? throw new InvalidOperationException(
                                                    "Connection string 'Postgres' is not configured.");
 
-    public Task SaveAsync(string procurementId, string xmlDocument, CancellationToken cancellationToken)
+    public async Task SaveAsync(string procurementId, string xmlDocument, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(procurementId))
-        {
-            throw new ArgumentException("Procurement identifier is required.", nameof(procurementId));
-        }
+        await using var connection = new NpgsqlConnection(_connectionString);
+        await connection.OpenAsync(cancellationToken);
 
-        if (string.IsNullOrWhiteSpace(xmlDocument))
-        {
-            throw new ArgumentException("XML document is required.", nameof(xmlDocument));
-        }
+        var query = @"
+            INSERT INTO procurement_xml_documents (procurement_id, xml_document)
+            VALUES (@id, @xml)
+            ON CONFLICT (procurement_id)
+            DO UPDATE SET xml_document = EXCLUDED.xml_document;
+        ";
 
-        _ = _connectionString;
-        _ = cancellationToken;
+        await using var cmd = new NpgsqlCommand(query, connection);
+        cmd.Parameters.AddWithValue("id", procurementId);
+        cmd.Parameters.Add("xml", NpgsqlDbType.Xml).Value = xmlDocument;
 
-        // Draft placeholder for PostgreSQL persistence.
-        // Real implementation should open a DB connection and insert procurementId + xmlDocument.
-        return Task.CompletedTask;
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 }
